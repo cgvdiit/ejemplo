@@ -1,0 +1,1582 @@
+<?php
+
+/**
+ * @file
+ * Code for the Caja 18 feature.
+ */
+
+include_once 'caja18.features.inc';
+
+define("ECK_TYPE_DATA_DEF", "datos_mediciones");
+define("ECK_TYPE_DATA_STAT", "estadistica_medicion");
+
+/**
+ * Implements hook_menu().
+ */
+function caja18_menu() {
+  $items = array();
+  $items['admin/content/caja18-quarter-data-import'] = array(
+    'title' => 'Upload Caja18 quarter data',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('caja18_quarter_data_import_form'),
+    'access arguments' => array('upload caja18 data'),
+    'weight' => 99,
+    'type' => MENU_LOCAL_TASK,
+  );
+  $items['admin/content/caja18-data-import'] = array(
+    'title' => 'Upload Caja18 data',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('caja18_data_import_form'),
+    'access arguments' => array('upload caja18 data'),
+    'weight' => 99,
+    'type' => MENU_LOCAL_TASK,
+  );
+  $items['dashboard'] = array(
+    'title' => '',
+    'page callback' => 'caja18_dashboard_page',
+    'access arguments' => array('access content'),
+    'file' => 'caja18.pages.inc',
+  );
+  $items['ajax/indicadores'] = array(
+    'page callback' => 'caja18_ajax_get_indicadores',
+    'access arguments' => array('access content'),
+    'delivery callback' => 'drupal_json_output',
+  );
+  $items['ajax/promedios'] = array(
+    'page callback' => 'caja18_ajax_get_promedios',
+    'access arguments' => array('access content'),
+    'delivery callback' => 'drupal_json_output',
+  );
+  $items['ajax/filter-data/%'] = array(
+    'page callback' => 'caja18_ajax_get_filter_data',
+    'page arguments' => array(2),
+    'access arguments' => array('access content'),
+    'delivery callback' => 'drupal_json_output',
+  );
+
+  return $items;
+}
+
+/**
+* Implements hook_theme().
+*/
+function caja18_theme() {
+  return array(
+    'dashboard' => array(
+      'variables' => array("filterForm" => NULL, "ratios" => array(), "rol_access_class" => "rol-sucursal"),
+      'template' => 'dashboard',
+    ),
+  );
+}
+
+/**
+ * Client form generation function. Allows the user to upload an Excel file.
+ *
+ * @param $form_state
+ *   The current form values of a submission, used in multipage webforms.
+ *
+ * @see caja18_quarter_data_import_form_submit()
+ * @ingroup forms
+ */
+function caja18_quarter_data_import_form($form, $form_state) {
+  $form = array();
+  $form['quarter_file'] = array(
+    '#type' => 'file',
+    '#title' => t('Quarter data file'),
+    '#description' => t('Choose the data file containing the quarter data you want uploaded.')
+  );
+  $form['buttons'] = array(
+    '#tree' => FALSE,
+    '#weight' => 1000,
+  );
+
+  // Add the submit button.
+  $form['buttons']['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Submit'),
+    '#weight' => 10,
+  );
+
+  return $form;
+}
+
+/**
+ * Client form generation function. Allows the user to upload an Excel file.
+ *
+ * @param $form_state
+ *   The current form values of a submission, used in multipage webforms.
+ *
+ * @see caja18_data_import_form_submit()
+ * @ingroup forms
+ */
+function caja18_data_import_form($form, $form_state) {
+  $form = array();
+  $form['data_file'] = array(
+    '#type' => 'file',
+    '#title' => t('Data file'),
+    '#description' => t('Choose the data file containing the quarter data you want uploaded.')
+  );
+  $form['buttons'] = array(
+    '#tree' => FALSE,
+    '#weight' => 1000,
+  );
+
+  // Add the submit button.
+  $form['buttons']['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Submit'),
+    '#weight' => 10,
+  );
+
+  return $form;
+}
+
+/**
+ * Form submission function to parse the Excel file and add to the database.
+ *
+ * @param $form
+ *   The current form.
+ * @param $form_state
+ *   The current form values of a submission.
+ *
+ * @see caja18_data_import_form()
+ */
+function caja18_quarter_data_import_form_submit($form, $form_state) {
+  $limits = array(
+    'extensions' => 'xls xlsx'
+  );
+  $validators = array(
+    'file_validate_extensions' => array($limits['extensions'])
+  );
+
+  if ($file = file_save_upload('quarter_file', $validators)) {
+    //_caja18_import_import($form, $form_state, $file);
+    $sheetNameDatos = "DATOS PARA SUBIR";
+    $sheetNameSucursales = "Hoja1";
+    $filename = drupal_realpath($file->uri);
+    module_load_include('inc', 'phpexcel');
+    $xlsx = phpexcel_import($filename, FALSE, TRUE);
+    $sucursales = array();
+    if (isset($xlsx[$sheetNameSucursales])) {
+      $sucursales = $xlsx[$sheetNameSucursales];
+      array_shift($sucursales);
+    }
+    $data = $xlsx[$sheetNameDatos];
+    array_shift($data);
+    array_shift($data);
+
+    $batch = array(
+      'operations' => array(),
+      'finished' => 'caja18_quarter_data_import_finished',
+      'title' => t('Caja18 quarter import'),
+      'init_message' => t('Importing is starting...'),
+      'progress_message' => t('Imported @current out of @total.'),
+      'error_message' => t('Node importer has encountered an error.')
+    );
+
+    $batch['operations'][] = array('caja18_quarter_data_import_init', array($sucursales));
+    foreach ($data as $item) {
+      $batch['operations'][] = array('caja18_quarter_data_import_progress', array($item));
+    }
+    batch_set($batch);
+  }
+  else {
+    form_set_error('quarter_file', t('Uploaded file could not be saved.'));
+    watchdog('caja18-import', 'File save error. Could not save file %file to path %path.!details', array('%file' => $file->filename, '%path' => $file->filepath, '!results' => '<br />\n<pre>' . htmlentities(print_r($form_state['values'], TRUE)) . '</pre>'), WATCHDOG_ERROR);
+  }
+}
+
+function caja18_quarter_data_import_init($sucursales, &$context) {
+  $context['results']['sucursales'] = $sucursales;
+}
+
+function caja18_quarter_data_import_progress($item, &$context) {
+  _caja18_import_import(array($item), $context['results']['sucursales']);
+}
+
+/**
+ * Function to parse the delimited file and add submissions to the database.
+ *
+ * @param $form
+ *   The current form.
+ * @param $form_state
+ *   The current form values of a submission.
+ *
+ * @see caja18_data_import_form()
+ */
+//function _caja18_import_import($form, $form_state, $file) {
+function _caja18_import_import($data, $sucursales) {
+  $webformComponentes = array(
+    "p2",
+    "p3",
+    "p4",
+    "p5",
+    "p6",
+    "p7",
+  );
+  $entity_type = 'datos_mediciones';
+  $indicador_type = 'estadistica_medicion';
+  /*
+  $sheetNameDatos = "DATOS PARA SUBIR";
+  $sheetNameSucursales = "Hoja1";
+  $filename = drupal_realpath($file->uri);
+  module_load_include('inc', 'phpexcel');
+  $xlsx = phpexcel_import($filename, FALSE, TRUE);
+  $sucursales = array();
+  if (isset($xlsx[$sheetNameSucursales])) {
+    $sucursales = $xlsx[$sheetNameSucursales];
+    array_shift($sucursales);
+  }
+  $data = $xlsx[$sheetNameDatos];
+  array_shift($data);
+  $header = array_shift($data);
+  */
+  //$quarter = NULL;
+  if ($cache = cache_get('caja18_indicadores_cache')) {
+    $indicadores = $cache->data;
+  } else {
+    $queryIndicadores = db_select("field_data_field_id", "i");
+    $queryIndicadores->condition("i.entity_type", $entity_type);
+    $queryIndicadores->condition("i.bundle", "indicador");
+    $queryIndicadores->condition("i.deleted", 0);
+    $queryIndicadores->addField("i", "field_id_value");
+    $queryIndicadores->addField("i", "entity_id");
+    $queryIndicadores->orderBy("i.field_id_value");
+    $indicadores = $queryIndicadores->execute()->fetchAllKeyed();
+    cache_set('caja18_indicadores_cache', $indicadores, 'cache');
+  }
+
+  foreach ($data as $index => $row) {
+    $idTrimestre = preg_replace('/[^0-9]/', '', $row[0]);
+    if ($cache = cache_get("caja18_quarter_$idTrimestre")) {
+      $quarter = $cache->data;
+    } else {
+      $nidTrimestre = _caja18_get_entity_id_by_field_id($entity_type, "trimestre", $idTrimestre);
+      $quarter = null;
+      if (empty($nidTrimestre)) {
+        $quarter = entity_create($entity_type, array('type' => 'trimestre'));
+        $wrapper = entity_metadata_wrapper($entity_type, $quarter);
+        $wrapper->field_id = $idTrimestre;
+        $wrapper->save();
+        drupal_set_message(t("Se creo el trimestre %id. !url", array("%id" => $idTrimestre, "!url" => l("Edita el trimestre para asignar un nombre", "admin/structure/entity-type/$entity_type/trimestre/{$quarter->id}/edit"))), "warning");
+      } else {
+        $quarter = entity_load_single($entity_type, $nidTrimestre);
+      }
+      cache_set("caja18_quarter_$idTrimestre", $quarter, 'cache');
+    }
+    $tipo = "";
+    $indicador_bundle = "indicador_trimestre";
+    $indicador = NULL;
+    $sucursal = NULL;
+    $zona = NULL;
+    $grupo = NULL;
+    $indicadorQuery = db_select("field_data_field_trimestre", "t");
+    $indicadorQuery->join("field_data_field_tipo_indicador_trimestre", "i", "t.entity_id = i.entity_id and i.entity_type = :entity_type and i.bundle = :bundle and i.deleted = 0", array(":entity_type" => $indicador_type, ":bundle" => $indicador_bundle));
+    $indicadorQuery->condition("t.entity_type", $indicador_type);
+    $indicadorQuery->condition("t.bundle", $indicador_bundle);
+    $indicadorQuery->condition("t.deleted", 0);
+    $indicadorQuery->condition("t.field_trimestre_target_id", $quarter->id);
+    $indicadorQuery->addField("t", "entity_id");
+
+    if ($row[3] == "Total") {
+      $tipo = "total";
+      $indicadorQuery->condition("i.field_tipo_indicador_trimestre_value", $tipo);
+      $idIndicador = $indicadorQuery->execute()->fetchColumn();
+    } else if (is_numeric($row[3])) {
+        $tipo = "sucursal";
+        $idSucursal = $row[3];
+        $sucursal = _caja18_get_sucursal($idSucursal, $sucursales);
+        if (empty($sucursal)) {
+          form_set_error('quarter_file', "No se pudo encontrar la sucursal id $idSucursal.");
+          watchdog('caja19-data-import', 'No se pudo encontrar la sucursal id %id.', array('%id' => $idSucursal), WATCHDOG_ERROR);
+          return;
+        }
+        $indicadorQuery->condition("i.field_tipo_indicador_trimestre_value", $tipo);
+        $indicadorQuery->join("field_data_field_sucursal", "s", "t.entity_id = s.entity_id and s.entity_type = :entity_type and s.bundle = :bundle and s.deleted = 0", array(":entity_type" => $entity_type, ":bundle" => $indicador_bundle));
+        $indicadorQuery->condition("s.field_sucursal_target_id", $sucursal->id);
+        $idIndicador = $indicadorQuery->execute()->fetchColumn();
+        $idGrupo = preg_replace('/[^0-9]/', '', $row[1]);
+        $idZona = preg_replace('/[^0-9]/', '', $row[2]);
+        $grupo = _caja18_get_grupo($idGrupo);
+        $zona = _caja18_get_zona($idZona);
+      } else {
+      $c = $row[3][0];
+      $id = preg_replace('/[^0-9]/', '', $row[3]);
+      switch ($c) {
+        case 'Z':
+          $tipo = "zona";
+          $indicadorQuery->condition("i.field_tipo_indicador_trimestre_value", $tipo);
+          $zona = _caja18_get_zona($id);
+          if (empty($zona)) {
+            form_set_error('quarter_file', "No se pudo encontrar la zona id $id.");
+            watchdog('caja19-data-import', 'No se pudo encontrar la zona id %id.', array('%id' => $id), WATCHDOG_ERROR);
+            return;
+          }
+          $indicadorQuery->join("field_data_field_zona", "z", "t.entity_id = z.entity_id and z.entity_type = :entity_type and z.bundle = :bundle and z.deleted = 0", array(":entity_type" => $entity_type, ":bundle" => $indicador_bundle));
+          $indicadorQuery->condition("z.field_zona_target_id", $zona->id);
+          break;
+        case 'G':
+          $tipo = "grupo";
+          $indicadorQuery->condition("i.field_tipo_indicador_trimestre_value", $tipo);
+          $id += 10;
+          $grupo = _caja18_get_grupo($id);
+          if (empty($grupo)) {
+            form_set_error('quarter_file', "No se pudo encontrar el grupo id $id.");
+            watchdog('caja19-data-import', 'No se pudo encontrar el grupo id %id.', array('%id' => $id), WATCHDOG_ERROR);
+            return;
+          }
+          $indicadorQuery->join("field_data_field_grupo", "g", "t.entity_id = g.entity_id and g.entity_type = :entity_type and g.bundle = :bundle and g.deleted = 0", array(":entity_type" => $entity_type, ":bundle" => $indicador_bundle));
+          $indicadorQuery->condition("g.field_grupo_target_id", $grupo->id);
+          break;
+      }
+      $idIndicador = $indicadorQuery->execute()->fetchColumn();
+    }
+    $wrapper = NULL;
+    if (empty($idIndicador)) {
+      $indicador = entity_create($indicador_type, array('type' => $indicador_bundle));
+      $wrapper = entity_metadata_wrapper($indicador_type, $indicador);
+      $wrapper->field_trimestre->set($quarter->id);
+      $wrapper->field_tipo_indicador_trimestre = $tipo;
+      if ($sucursal) {
+        $wrapper->field_sucursal->set($sucursal->id);
+      }
+      if ($zona) {
+        $wrapper->field_zona->set($zona->id);
+      }
+      if ($grupo) {
+        $wrapper->field_grupo->set($grupo->id);
+      }
+    } else {
+      $indicador = entity_load_single($indicador_type, $idIndicador);
+      $wrapper = entity_metadata_wrapper($indicador_type, $indicador);
+    }
+    if (empty($wrapper)) {
+      form_set_error('quarter_file', "No se pudo importar registro $index.");
+      watchdog('caja19-data-import', 'No se pudo importar registro %id.', array('%id' => $index), WATCHDOG_ERROR);
+      return;
+    }
+    $wrapper->field_cantidad_mediciones = $row[4];
+    if (!$wrapper->field_preguntas_medicion_actual->value()) {
+      foreach ($webformComponentes as $keyPregunta) {
+        $pregunta = entity_create("field_collection_item", array("field_name" => "field_preguntas_medicion_actual"));
+        $pregunta->setHostEntity($indicador_type, $indicador);
+        $wrapperPregunta = entity_metadata_wrapper('field_collection_item', $pregunta);
+        $wrapperPregunta->field_pregunta_medicion_actual = $keyPregunta;
+        _caja18_add_indicador_pregunta($wrapperPregunta, $row, $indicadores);
+        $wrapperPregunta->save(TRUE);
+      }
+    }
+    $wrapper->save();
+  }
+}
+
+/**
+ * Implements hook_permission().
+ */
+function caja18_permission() {
+  return array(
+    'upload caja18 data' => array(
+      'title' => t('Upload Caja 18 data'),
+    ),
+    'view any caja18 kpi data' => array(
+      'title' => t('View any Caja 18 kpi data'),
+    ),
+  );
+}
+
+function _caja18_get_entity_id_by_field_id($entity_type, $bundle, $field_id) {
+  $query = db_select("field_data_field_id", "t");
+  $query->condition("t.entity_type", $entity_type);
+  $query->condition("t.bundle", $bundle);
+  $query->condition("t.deleted", 0);
+  $query->condition("t.field_id_value", $field_id);
+  $query->addField("t", "entity_id");
+  return $query->execute()->fetchColumn();
+}
+
+function _caja18_get_sucursal($id, $sucursales) {
+  $entity = NULL;
+  $entity_type = "datos_mediciones";
+  $bundle = "sucursal";
+  $entityId = _caja18_get_entity_id_by_field_id($entity_type, $bundle, $id);
+  if (empty($entityId)) {
+    $row = array_filter($sucursales, function ($item) use ($id) {
+      return $item[1] == $id;
+    });
+    if (empty($row)) {
+      return false;
+    }
+    $row = reset($row);
+    $idZona = preg_replace('/[^0-9]/', '', $row[2]);
+    $zona = _caja18_get_zona($idZona);
+    if (empty($zona)) {
+      return false;
+    }
+    $idGrupo = $row[3];
+    $grupo = _caja18_get_grupo($idGrupo);
+    if (empty($grupo)) {
+      return false;
+    }
+    $entity = entity_create($entity_type, array('type' => $bundle));
+    $wrapper = entity_metadata_wrapper($entity_type, $entity);
+    $wrapper->title = $row[0];
+    $wrapper->field_id = $id;
+    $wrapper->field_zona = $zona->id;
+    $wrapper->field_grupo = $grupo->id;
+    $wrapper->save();
+  } else {
+    $entity = entity_load_single($entity_type, $entityId);
+  }
+  return $entity;
+}
+
+function _caja18_get_zona($id) {
+  $entity = NULL;
+  $entity_type = "datos_mediciones";
+  $bundle = "zona";
+  $entityId = _caja18_get_entity_id_by_field_id($entity_type, $bundle, $id);
+  if (empty($entityId)) {
+    $entity = entity_create($entity_type, array('type' => $bundle));
+    $wrapper = entity_metadata_wrapper($entity_type, $entity);
+    $wrapper->title = $id;
+    $wrapper->field_id = $id;
+    $wrapper->save();
+    drupal_set_message(t("Se creo la zona %id. !url", array("%id" => $id, "!url" => l("Edita la zona para asignar un nombre", "admin/structure/entity-type/$entity_type/$bundle/{$entity->id}/edit"))), "warning");
+  } else {
+    $entity = entity_load_single($entity_type, $entityId);
+  }
+  return $entity;
+}
+
+function _caja18_get_grupo($id) {
+  $entity = NULL;
+  $entity_type = "datos_mediciones";
+  $bundle = "grupo";
+  $entityId = _caja18_get_entity_id_by_field_id($entity_type, $bundle, $id);
+  if (empty($entityId)) {
+    $entity = entity_create($entity_type, array('type' => $bundle));
+    $wrapper = entity_metadata_wrapper($entity_type, $entity);
+    $wrapper->title = $id;
+    $wrapper->field_id = $id;
+    $wrapper->save();
+    drupal_set_message(t("Se creo el grupo %id. !url", array("%id" => $id, "!url" => l("Edita el grupo para asignar un nombre", "admin/structure/entity-type/$entity_type/$bundle/{$entity->id}/edit"))), "warning");
+  } else {
+    $entity = entity_load_single($entity_type, $entityId);
+  }
+  return $entity;
+}
+
+function _caja18_add_indicador_pregunta(&$wrapperPregunta, $row, $indicadores) {
+  $map = array(
+    "p2" => array(5, 6, 7, 8, 9),
+    "p3" => array(10, 11, 12, 13, 14),
+    "p4" => array(15, 16, 17, 18, 19),
+    "p5" => array(20, 21, 22, 23, 24),
+    "p6" => array(25, 26, 27, 28, 29),
+    "p7" => array(30, 31, 32, 33, 34),
+  );
+  $key = $wrapperPregunta->field_pregunta_medicion_actual->value();
+  $wrapperIndicadores = array();
+  $map = array_combine($indicadores, $map[$key]);
+  if (empty($wrapperPregunta->field_indicadores) || empty($wrapperPregunta->field_indicadores->value())) {
+    foreach ($indicadores as $idIndicador) {
+      $indicador = entity_create("field_collection_item", array("field_name" => "field_indicadores"));
+      $indicador->setHostEntity("field_collection_item", $wrapperPregunta->value());
+      $wrapperIndicador = entity_metadata_wrapper('field_collection_item', $indicador);
+      $wrapperIndicador->field_indicador->set($idIndicador);
+
+      $valor = $row[$map[$idIndicador]];
+      if (!empty($valor) || $valor === 0) {
+        $wrapperIndicador->field_valor = $valor;
+      }
+      $wrapperIndicador->save(TRUE);
+
+      $wrapperIndicadores[$idIndicador] = clone $wrapperIndicador;
+    }
+  }
+}
+
+
+function caja18_dashboard_filter_form($form, &$form_state) {
+  global $user;
+  $context= array();
+  $cache = cache_get("caja18-filter-form-{$user->uid}");
+  if ($cache) {
+    $context = $cache->data;
+  }
+  $context += array(
+    "trimestre" => "",
+    "grupo" => "",
+    "zona" => "",
+    "sucursal" => "",
+    "semana" => "",
+    "semana_hasta" => "",
+  );
+  $form = array();
+  $form['container'] = array(
+    '#type' => 'container',
+  );
+  $form['container']['trimestre'] = array(
+    '#prefix' => '<div class="container-inline">',
+    '#suffix' => '</div>',
+    '#type' => "select",
+    '#options' => array(),
+    '#title' => "Trimestre",
+    '#default_value' => $context['trimestre'],
+  );
+  $form['container']['grupo'] = array(
+    '#prefix' => '<div class="container-inline">',
+    '#suffix' => '</div>',
+    '#type' => "select",
+    '#options' => array(),
+    '#title' => "Grupo",
+    '#default_value' => $context['grupo'],
+  );
+  $form['container']['zona'] = array(
+    '#prefix' => '<div class="container-inline">',
+    '#suffix' => '</div>',
+    '#type' => "select",
+    '#options' => array(),
+    '#title' => "Zona",
+    '#default_value' => $context['zona'],
+  );
+  $form['container']['sucursal'] = array(
+    '#prefix' => '<div class="container-inline">',
+    '#suffix' => '</div>',
+    '#type' => "select",
+    '#options' => array(),
+    '#title' => "Sucursal",
+    '#default_value' => $context['sucursal'],
+  );
+  $form['container']['actions'] = array(
+    '#type' => 'container',
+    '#attributes' => array(
+      'class' => array("acciones"),
+    ),
+  );
+  $form['container']['actions']['actualizar'] = array(
+    '#type' => "button",
+    '#value' => "Actualizar",
+  );
+  return $form;
+}
+
+function _caja18_get_children($context, $parentID, $parentType, $type) {
+  if ($context['trimestre']) {
+    if ($parentType == "jefe") {
+      $parentType = "zona";
+    }
+    if ($type == "jefe") {
+      $type = "zona";
+    }
+    $query = db_select("eck_datos_mediciones", "e");
+    $query->join("field_data_field_id", "ids", "e.id = ids.entity_id and ids.entity_type = :data_type and ids.bundle = :opt_bundle and ids.deleted = 0", array(":data_type" => ECK_TYPE_DATA_DEF, ":opt_bundle" => $type));
+    $query->join("field_data_field_$type", "st", "e.id = st.field_{$type}_target_id and st.entity_type = :stat_type and st.bundle = :stat_bundle and st.deleted = 0", array(":stat_type" => ECK_TYPE_DATA_STAT, ":stat_bundle" => 'indicador_trimestre'));
+    $query->join("field_data_field_trimestre", "t", "t.entity_id = st.entity_id and t.entity_type = :stat_type and t.bundle = :stat_bundle and t.deleted = 0", array(":stat_type" => ECK_TYPE_DATA_STAT, ":stat_bundle" => 'indicador_trimestre'));
+    $query->join("field_data_field_id", "idt", "t.field_trimestre_target_id = idt.entity_id and idt.entity_type = :data_type and idt.bundle = 'trimestre' and idt.deleted = 0", array(":data_type" => ECK_TYPE_DATA_DEF));
+    $query->join("field_data_field_$parentType", "pt", "t.entity_id = pt.entity_id and pt.entity_type = :stat_type and pt.bundle = :stat_bundle and pt.deleted = 0", array(":stat_type" => ECK_TYPE_DATA_STAT, ":stat_bundle" => 'indicador_trimestre'));
+    $query->join("field_data_field_id", "idp", "pt.field_{$parentType}_target_id = idp.entity_id and idp.entity_type = :data_type and idp.bundle = :parent_bundle and idp.deleted = 0", array(":data_type" => ECK_TYPE_DATA_DEF, ":parent_bundle" => $parentType));
+    $query->condition("e.type", $type);
+    $query->condition("idt.field_id_value", $context["trimestre"]);
+    $query->condition("idp.field_id_value", $parentID);
+    $query->addField("ids", "field_id_value");
+
+  } else {
+    $query = db_select("webform_submissions", "s");
+    $query->join("webform_component", "c", "s.nid = c.nid and c.form_key = :parentType", array(':parentType' => $parentType));
+    $query->join("node", "n", "c.nid = n.nid and n.title = 'Medición Actual'");
+    $query->join("webform_submitted_data", "d", "s.sid = d.sid and c.cid = d.cid");
+    $query->join("webform_component", "c2", "s.nid = c2.nid and c2.form_key = :type", array(':type' => $type));
+    $query->join("webform_submitted_data", "d2", "s.sid = d2.sid and c2.cid = d2.cid");
+    $query->condition("d.data", $parentID);
+    $query->addField("d2", "data");
+    $query->groupBy("d2.data");
+  }
+
+  return $query->execute()->fetchCol();
+}
+
+function _caja18_get_access_conditions() {
+  global $user;
+  $conditions = &drupal_static(__FUNCTION__);
+  if (!isset($conditions)) {
+    $context = array();
+    $cache = cache_get("caja18-filter-form-{$user->uid}");
+    if ($cache) {
+      $context = $cache->data;
+    }
+    $context += array(
+      'trimestre' => '',
+      'grupo' => '',
+      'zona' => '',
+      'sucursal' => '',
+    );
+
+    $conditions = array(
+      'sucursal' => 0,
+      'zona' => 0,
+      'grupo' => 0,
+      'jefe' => 0,
+    );
+    if ($context['trimestre']) {
+      $conditions['trimestre'] = $context['trimestre'];
+    }
+    global $user;
+    $account = user_load($user->uid);
+    $sucursal_entity= NULL;
+    $zona_entity = NULL;
+    $grupo_entity = NULL;
+
+    if ($account->field_sucursal) {
+      $sucursal_entity = entity_load_single("datos_mediciones", $account->field_sucursal['und'][0]['target_id']);
+    }
+    if ($account->field_zona) {
+      $zona_entity = entity_load_single("datos_mediciones", $account->field_zona['und'][0]['target_id']);
+    }
+    if ($account->field_grupo) {
+      $grupo_entity = entity_load_single("datos_mediciones", $account->field_grupo['und'][0]['target_id']);
+    }
+
+    if ($sucursal_entity) {
+      $conditions['sucursal'] = $sucursal_entity->field_id['und'][0]['value'];
+      if ($context['pregunta']) {
+        $conditions['grupo'] = _caja18_get_children($context, $conditions['sucursal'], 'sucursal', 'grupo');
+        $conditions['sucursal'] = 0;
+      }
+    }
+    if ($zona_entity) {
+      $conditions['zona'] = $zona_entity->field_id['und'][0]['value'];
+      $conditions['jefe'] = $conditions['zona'];
+      $conditions['sucursal'] = _caja18_get_children($context, $conditions['zona'], 'jefe', 'sucursal');
+    }
+    if ($grupo_entity) {
+      $conditions['grupo'] = $grupo_entity->field_id['und'][0]['value'];
+      $conditions['zona'] = _caja18_get_children($context, $conditions['grupo'], 'grupo', 'jefe');
+      $conditions['jefe'] = $conditions['zona'];
+      $conditions['sucursal'] = _caja18_get_children($context, $conditions['grupo'], 'grupo', 'sucursal');
+    }
+  }
+  return $conditions;
+}
+
+function _caja18_get_filter_option($trimestre, $option, $tipo = '', $order = NULL) {
+  switch ($tipo) {
+    case 'medicion-actual':
+      $bundle = $option;
+      if ($option == "zona") {
+        $option = "jefe";
+      }
+      $access_conditions = _caja18_get_access_conditions();
+      $query = db_select("webform_submissions", "s");
+      $query->join("webform_component", "c", "s.nid = c.nid and c.form_key = :option", array(":option" => $option));
+      $query->join("node", "n", "c.nid = n.nid and n.title = 'Medición Actual'");
+      $query->join("webform_submitted_data", "d", "s.sid = d.sid and c.cid = d.cid");
+      $query->addField("d", "data", "id");
+      $query->join("field_data_field_id", "did", "d.data = did.field_id_value and did.entity_type = 'datos_mediciones' and did.bundle = :bundle", array(":bundle" => $bundle));
+      $query->join("eck_datos_mediciones", "e", "did.entity_id = e.id and e.type = :bundle", array(":bundle" => $bundle));
+
+      $query->join("webform_component", "cs", "n.nid = cs.nid and cs.form_key = :option", array(':option' => $option));
+      $query->join("webform_submitted_data", "ds", "s.sid = ds.sid and cs.cid = ds.cid");
+      if (!user_access("view any caja18 kpi data")) {
+        $query->condition("ds.data", $access_conditions[$option]);
+      }
+
+      $query->addField("e", "title");
+      $query->groupBy("d.data");
+      break;
+    case 'trimestre':
+      $access_conditions = _caja18_get_access_conditions();
+      $query = db_select("eck_datos_mediciones", "e");
+      $query->join("field_data_field_id", "ids", "e.id = ids.entity_id and ids.entity_type = :data_type and ids.bundle = :opt_bundle and ids.deleted = 0", array(":data_type" => ECK_TYPE_DATA_DEF, ":opt_bundle" => $option));
+      $query->join("field_data_field_$option", "st", "e.id = st.field_{$option}_target_id and st.entity_type = :stat_type and st.bundle = :stat_bundle and st.deleted = 0", array(":stat_type" => ECK_TYPE_DATA_STAT, ":stat_bundle" => 'indicador_trimestre'));
+      $query->join("field_data_field_trimestre", "t", "t.entity_id = st.entity_id and t.entity_type = :stat_type and t.bundle = :stat_bundle and t.deleted = 0", array(":stat_type" => ECK_TYPE_DATA_STAT, ":stat_bundle" => 'indicador_trimestre'));
+      $query->join("field_data_field_id", "idt", "t.field_trimestre_target_id = idt.entity_id and idt.entity_type = :data_type and idt.bundle = 'trimestre' and idt.deleted = 0", array(":data_type" => ECK_TYPE_DATA_DEF));
+      $query->condition("e.type", $option);
+      $query->condition("idt.field_id_value", $trimestre);
+      if (!user_access("view any caja18 kpi data")) {
+        $query->condition("ids.field_id_value", $access_conditions[$option]);
+      }
+      $query->addField("ids", "field_id_value", "id");
+      $query->addField("e", "title");
+      $query->groupBy("ids.field_id_value");
+      break;
+    default:
+      $query = db_select("eck_datos_mediciones", "d");
+      $query->join("field_data_field_id", "i", "d.id = i.entity_id and i.entity_type = :entity_type and i.bundle = :bundle and i.deleted = 0", array(":entity_type" => ECK_TYPE_DATA_DEF, ":bundle" => $option));
+      $query->condition("d.type", $option);
+      $query->addField("i", "field_id_value", "id");
+      $query->addField("d", "title");
+      if (empty($order)) {
+        $query->orderBy("d.title");
+      } else {
+        $query->orderBy("i.field_id_value", $order);
+      }
+  }
+  return $query->execute()->fetchAll();
+}
+
+function _caja18_get_filter_option_semana() {
+  $queryTextos = db_select("webform_submitted_data", "d");
+  $queryTextos->join("webform_component", "c", "d.cid = c.cid and c.form_key = 'fsemana'");
+  $queryTextos->join("node", "n", "d.nid = n.nid and n.title = 'Medición Actual'");
+  $queryTextos->fields("d", array("sid", "data"));
+
+  $query = db_select("webform_submitted_data", "d");
+  $query->join("webform_component", "c", "d.cid = c.cid and c.form_key = 'semana'");
+  $query->join("node", "n", "d.nid = n.nid and n.title = 'Medición Actual'");
+  $query->join($queryTextos, "t", "d.sid = t.sid");
+  $query->addField("d", "data", "id");
+  $query->addField("t", "data", "value");
+  $query->orderBy("d.data","DESC");
+  return $query->execute()->fetchAllKeyed();
+}
+
+function _caja18_get_sucursales() {
+  $query = db_select("eck_datos_mediciones", "d");
+  $query->join("field_data_field_id", "i", "d.id = i.entity_id and i.entity_type = 'datos_mediciones' and i.bundle = 'sucursal' and i.deleted = 0");
+  $query->join("field_data_field_zona", "z", "d.id = z.entity_id and z.entity_type = 'datos_mediciones' and z.bundle = 'sucursal' and z.deleted = 0");
+  $query->join("field_data_field_grupo", "g", "d.id = g.entity_id and g.entity_type = 'datos_mediciones' and g.bundle = 'sucursal' and g.deleted = 0");
+  $query->condition("d.type", "sucursal");
+  $query->fields("d", array("id", "title"));
+  $query->addField("i", "field_id_value");
+  $query->addField("z", "field_zona_target_id");
+  $query->addField("g", "field_grupo_target_id");
+  return $query->execute()->fetchAll();
+}
+
+function _caja18_get_last_quarter() {
+  $query = db_select("field_data_field_id", "t");
+  $query->condition("entity_type", ECK_TYPE_DATA_DEF);
+  $query->condition("bundle", "trimestre");
+  $query->condition("deleted", 0);
+  $query->addExpression("max(field_id_value)", "id");
+  return $query->execute()->fetchColumn();
+}
+
+function caja18_ajax_get_indicadores($tipo, $pregunta = NULL) {
+  $series = array();
+  $context = $_POST;
+  global $user;
+  $context['pregunta'] = NULL;
+  if (!empty($pregunta)) {
+    $context['pregunta'] = $pregunta;
+  }
+  cache_set("caja18-filter-form-{$user->uid}", $context);
+  $context += array(
+    'trimestre' => '',
+    'grupo' => '',
+    'zona' => '',
+    'sucursal' => '',
+  );
+  $filtro = array(
+    "tipo" => "Sucursal",
+    "valor" => "",
+    "element" => "sucursal",
+  );
+  if ($context['sucursal']) {
+    $filtro['valor'] = $context['sucursal'];
+  } else if ($context['zona']) {
+    $filtro['tipo'] = "Zona";
+    $filtro['valor'] = $context['zona'];
+    $filtro['element'] = "zona";
+  } else if ($context['grupo']) {
+    $filtro['tipo'] = "Grupo";
+    $filtro['valor'] = $context['grupo'];
+    $filtro['element'] = "grupo";
+  }
+  $tipo = "trimestre";
+  if (!$context['trimestre']) {
+    $context['trimestre'] = _caja18_get_last_quarter();
+  }
+  $label = "Trimestre " . $context['trimestre'];
+  $semana = array(
+    "label" => "",
+    "from" => "",
+    "to" => "",
+  );
+  if (!$context['trimestre']) {
+    if ($context['semana']) {
+      $semana['label'] = "Semana";
+      $semana['from'] = $context['semana'];
+    }
+    if ($context['semana_hasta']) {
+      $semana['to'] = $context['semana_hasta'];
+    }
+  }
+
+  $series = _caja18_series_indicadores($context);
+  $data = array(
+    "series" => $series,
+    "tipo" => array(
+      "id" => $tipo,
+      "label" => $label,
+    ),
+    "filtro_principal" => $filtro,
+    "seleccion_semana" => $semana,
+    "muestra" => caja18_get_muestra($context),
+  );
+
+  return $data;
+}
+
+function caja18_ajax_get_filter_data($tipo, $trimestre = '') {
+  if (empty($trimestre)) {
+    $trimestre = _caja18_get_last_quarter();
+  }
+  $sucursales = _caja18_get_filter_option($trimestre,"sucursal", $tipo, "ASC");
+  $zonas = _caja18_get_filter_option($trimestre, "zona", $tipo);
+  $grupos = _caja18_get_filter_option($trimestre, "grupo", $tipo);
+  $data = array(
+    "trimestre" => _caja18_get_filter_option($trimestre, "trimestre", '', "DESC"),
+    "grupo" => count($grupos) > 1 ? array_merge(array(array('id' => '',  'title' => 'Todas')), $grupos) : $grupos,
+    "zona" => count($zonas) > 1 ? array_merge(array(array('id' => '',  'title' => 'Todas')), $zonas) : $zonas,
+    "sucursal" => count($sucursales) > 1 ? array_merge(array(array('id' => '',  'title' => 'Todas')), $sucursales) : $sucursales,
+  );
+  return $data;
+}
+
+function caja18_ajax_get_promedios($tipo, $pregunta = NULL) {
+  $data = array();
+  $context = $_POST;
+  $context['pregunta'] = NULL;
+  if (!empty($pregunta)) {
+    $context['pregunta'] = $pregunta;
+  }
+  $context += array(
+    'trimestre' => '',
+    'grupo' => '',
+    'zona' => '',
+    'sucursal' => '',
+  );
+  if (empty($context['trimestre'])) {
+    $context['trimestre'] = _caja18_get_last_quarter();
+  }
+
+  $data = _caja18_promedios_preguntas($context);
+
+  return $data;
+}
+
+function _caja18_id_preguntas() {
+  $ids = array(
+    "p2",
+    "p3",
+    "p4",
+    "p5",
+    "p6",
+  );
+  if (user_access("view any caja18 kpi data")) {
+    $ids[] = "p7";
+  }
+
+  return $ids;
+}
+
+function _caja18_join_indicadores_defs(&$query) {
+  $query = db_select($query, "d");
+  $query->join("field_data_field_id", "ii", "d.indicador = ii.field_id_value and ii.entity_type = :entity_type and ii.bundle = 'indicador' and ii.deleted = 0", array(':entity_type' => ECK_TYPE_DATA_DEF));
+  $query->join("eck_" . ECK_TYPE_DATA_DEF, "ed", "ii.entity_id = ed.id and ed.type = 'indicador'");
+  $query->fields("d");
+  $query->addField("ed", "title", "indicador_name");
+}
+
+function _caja18_indicadores_sucursales($context = array()) {
+  $excludedFilters = array(
+    'sucursal' => "",
+    'zona' => "",
+    'grupo' => "",
+  );
+  $context = $excludedFilters + $context;
+  if ($context['trimestre']) {
+    $query = db_select("field_data_field_trimestre", "t");
+    $query->join("field_data_field_cantidad_mediciones", "c", "t.entity_id = c.entity_id and c.entity_type = 'estadistica_medicion' and c.bundle = 'indicador_trimestre' and c.deleted = 0");
+    $query->join("field_data_field_tipo_indicador_trimestre", "tipo", "t.entity_id = tipo.entity_id and tipo.entity_type = 'estadistica_medicion' and tipo.bundle = 'indicador_trimestre' and tipo.deleted = 0");
+    $query->join("field_data_field_sucursal", "s", "t.entity_id = s.entity_id and s.entity_type = 'estadistica_medicion' and s.bundle = 'indicador_trimestre' and s.deleted = 0");
+    $query->join("field_data_field_id", "si", "s.field_sucursal_target_id = si.entity_id and si.entity_type = 'datos_mediciones' and si.bundle = 'sucursal' and si.deleted = 0");
+    $query->join("field_data_field_id", "tri", "t.field_trimestre_target_id = tri.entity_id and tri.entity_type = 'datos_mediciones' and tri.bundle = 'trimestre' and tri.deleted = 0");
+    $query->join("field_data_field_preguntas_medicion_actual", "p", "t.entity_id = p.entity_id and p.entity_type = 'estadistica_medicion' and p.bundle = 'indicador_trimestre' and p.deleted = 0");
+    $query->join("field_data_field_pregunta_medicion_actual", "tp", "p.field_preguntas_medicion_actual_value = tp.entity_id and tp.entity_type = 'field_collection_item' and tp.bundle = 'field_preguntas_medicion_actual' and tp.deleted = 0");
+    $query->join("field_data_field_indicadores", "ip", "p.field_preguntas_medicion_actual_value = ip.entity_id and ip.entity_type = 'field_collection_item' and ip.bundle = 'field_preguntas_medicion_actual' and ip.deleted = 0");
+    $query->join("field_data_field_indicador", "i", "ip.field_indicadores_value = i.entity_id and i.entity_type = 'field_collection_item' and i.bundle = 'field_indicadores' and i.deleted = 0");
+    $query->join("field_data_field_id", "idi", "i.field_indicador_target_id = idi.entity_id and idi.entity_type = 'datos_mediciones' and idi.bundle = 'indicador' and idi.deleted = 0");
+    $query->join("eck_datos_mediciones", "ie", "i.field_indicador_target_id = ie.id and ie.type = 'indicador'");
+    $query->join("eck_datos_mediciones", "se", "s.field_sucursal_target_id = se.id and se.type = 'sucursal'");
+    $query->join("field_data_field_valor", "v", "ip.field_indicadores_value = v.entity_id and v.entity_type = 'field_collection_item' and v.bundle = 'field_indicadores' and v.deleted = 0");
+    $query->condition("t.entity_type", "estadistica_medicion");
+    $query->condition("t.bundle", "indicador_trimestre");
+    $query->condition("idi.field_id_value", array(1, 2, 3));
+    $query->condition("tipo.field_tipo_indicador_trimestre_value", "sucursal");
+    $query->condition("tri.field_id_value", $context['trimestre']);
+    $query->condition("tp.field_pregunta_medicion_actual_value", $context['pregunta']);
+    $query->addExpression("CASE
+    WHEN idi.field_id_value =2 THEN -1
+    ELSE 1
+    END", "indicador_factor");
+    $query->addField("si", "field_id_value", "point_id");
+    $query->addField("se", "title", "point_name");
+    $query->addField("idi", "field_id_value", "indicador");
+    $query->addField("ie", "title", "indicador_name");
+    $query->addExpression("v.field_valor_value * (select indicador_factor)", "point_y");
+    $query->addField("c", "field_cantidad_mediciones_value", "serie_total");
+    $query->orderBy("idi.field_id_value");
+    $query->orderBy("si.field_id_value * 1");
+    $query->orderBy("se.title");
+    $query->orderBy("c.field_cantidad_mediciones_value");
+    _caja18_query_access($query, $context);
+  } else {
+    $queryTotales = caja18_get_query_totales($context);
+
+    $query = caja18_get_base_data_query();
+    $query->join($queryTotales, "t", "d2.data = t.sucursal_id");
+    $query->addField("t", "sucursal_id", "point_id");
+    $query->addField("t", "sucursal_name", "point_name");
+    $query->addField("t", "total", "serie_total");
+    $query->addExpression("count(d1.sid) / t.total * 100 * (select indicador_factor)", "point_y");
+    $query->condition("c1.form_key", $context['pregunta']);
+    $query->orderBy("indicador");
+    $query->orderBy("t.sucursal_id * 1");
+    $query->orderBy("t.sucursal_name");
+    $query->orderBy("t.total");
+    $query->groupBy("indicador");
+    $query->groupBy("t.sucursal_id");
+    $query->groupBy("t.sucursal_name");
+    $query->groupBy("t.total");
+    $query->having("indicador is not null");
+    _caja18_apply_filters($query, $context);
+
+    _caja18_join_indicadores_defs($query, "sucursal");
+  }
+
+  return $query->execute()->fetchAll();
+}
+
+function _caja18_indicadores_preguntas($context = array()) {
+  if ($context['trimestre']) {
+    $queryTotales = caja18_get_query_totales($context);
+    $preguntas = _caja18_id_preguntas();
+
+    $query = db_select("field_data_field_trimestre", "t");
+    $query->join("field_data_field_cantidad_mediciones", "c", "t.entity_id = c.entity_id and c.entity_type = 'estadistica_medicion' and c.bundle = 'indicador_trimestre' and c.deleted = 0");
+    $query->join("field_data_field_tipo_indicador_trimestre", "tipo", "t.entity_id = tipo.entity_id and tipo.entity_type = 'estadistica_medicion' and tipo.bundle = 'indicador_trimestre' and tipo.deleted = 0");
+    $query->join("field_data_field_id", "tri", "t.field_trimestre_target_id = tri.entity_id and tri.entity_type = 'datos_mediciones' and tri.bundle = 'trimestre' and tri.deleted = 0");
+    $query->join("field_data_field_preguntas_medicion_actual", "p", "t.entity_id = p.entity_id and p.entity_type = 'estadistica_medicion' and p.bundle = 'indicador_trimestre' and p.deleted = 0");
+    $query->join("field_data_field_pregunta_medicion_actual", "tp", "p.field_preguntas_medicion_actual_value = tp.entity_id and tp.entity_type = 'field_collection_item' and tp.bundle = 'field_preguntas_medicion_actual' and tp.deleted = 0");
+    $query->join("field_data_field_indicadores", "ip", "p.field_preguntas_medicion_actual_value = ip.entity_id and ip.entity_type = 'field_collection_item' and ip.bundle = 'field_preguntas_medicion_actual' and ip.deleted = 0");
+    $query->join("field_data_field_indicador", "i", "ip.field_indicadores_value = i.entity_id and i.entity_type = 'field_collection_item' and i.bundle = 'field_indicadores' and i.deleted = 0");
+    $query->join("field_data_field_id", "idi", "i.field_indicador_target_id = idi.entity_id and idi.entity_type = 'datos_mediciones' and idi.bundle = 'indicador' and idi.deleted = 0");
+    $query->join("eck_datos_mediciones", "ie", "i.field_indicador_target_id = ie.id and ie.type = 'indicador'");
+    $query->join("field_data_field_valor", "v", "ip.field_indicadores_value = v.entity_id and v.entity_type = 'field_collection_item' and v.bundle = 'field_indicadores' and v.deleted = 0");
+    $query->join("webform_component", "cp", "tp.field_pregunta_medicion_actual_value = cp.form_key");
+    $query->join($queryTotales, "tot", "tp.field_pregunta_medicion_actual_value = tot.pregunta_id");
+    $query->condition("t.entity_type", "estadistica_medicion");
+    $query->condition("t.bundle", "indicador_trimestre");
+    $query->condition("idi.field_id_value", array(1, 2, 3));
+    $query->condition("tri.field_id_value", $context['trimestre']);
+    $query->condition("cp.form_key", $preguntas);
+    $query->addExpression("CASE
+    WHEN idi.field_id_value =2 THEN -1
+    ELSE 1
+    END", "indicador_factor");
+    $query->addField("tp", "field_pregunta_medicion_actual_value", "point_id");
+    $query->addField("cp", "name", "point_name");
+    $query->addField("idi", "field_id_value", "indicador");
+    $query->addField("ie", "title", "indicador_name");
+    $query->addExpression("v.field_valor_value * (select indicador_factor)", "point_y");
+    $query->addField("tot", "total", "serie_total");
+    _caja18_apply_filters($query, $context);
+  } else {
+    $preguntas = _caja18_id_preguntas();
+    $queryTotales = caja18_get_query_totales($context);
+
+    $query = caja18_get_base_data_query();
+    $query->join($queryTotales, "t", "d1.cid = t.pregunta_id");
+    $query->condition("c1.form_key", $preguntas, "IN");
+    $query->addField("c1", "form_key", "point_id");
+    $query->addField("t", "pregunta_name", "point_name");
+    $query->addField("t", "total", "serie_total");
+    $query->addExpression("count(d1.sid) / t.total * 100 * (select indicador_factor)", "point_y");
+    $query->orderBy("indicador");
+    $query->orderBy("t.pregunta_id");
+    $query->orderBy("t.pregunta_name");
+    $query->orderBy("t.total");
+    $query->groupBy("indicador");
+    $query->groupBy("t.pregunta_id");
+    $query->groupBy("t.pregunta_name");
+    $query->groupBy("t.total");
+    $query->having("indicador is not null");
+    _caja18_apply_filters($query, $context);
+    _caja18_join_indicadores_defs($query);
+  }
+
+  return $query->execute()->fetchAll();
+}
+
+function _caja18_promedios_preguntas($context) {
+  if ($context['trimestre']) {
+    $query = db_select("field_data_field_trimestre", "t");
+    $query->join("field_data_field_cantidad_mediciones", "c", "t.entity_id = c.entity_id and c.entity_type = 'estadistica_medicion' and c.bundle = 'indicador_trimestre' and c.deleted = 0");
+    $query->join("field_data_field_tipo_indicador_trimestre", "tipo", "t.entity_id = tipo.entity_id and tipo.entity_type = 'estadistica_medicion' and tipo.bundle = 'indicador_trimestre' and tipo.deleted = 0");
+    $query->join("field_data_field_id", "tri", "t.field_trimestre_target_id = tri.entity_id and tri.entity_type = 'datos_mediciones' and tri.bundle = 'trimestre' and tri.deleted = 0");
+    $query->join("field_data_field_preguntas_medicion_actual", "p", "t.entity_id = p.entity_id and p.entity_type = 'estadistica_medicion' and p.bundle = 'indicador_trimestre' and p.deleted = 0");
+    $query->join("field_data_field_pregunta_medicion_actual", "tp", "p.field_preguntas_medicion_actual_value = tp.entity_id and tp.entity_type = 'field_collection_item' and tp.bundle = 'field_preguntas_medicion_actual' and tp.deleted = 0");
+    $query->join("field_data_field_indicadores", "ip", "p.field_preguntas_medicion_actual_value = ip.entity_id and ip.entity_type = 'field_collection_item' and ip.bundle = 'field_preguntas_medicion_actual' and ip.deleted = 0");
+    $query->join("field_data_field_indicador", "i", "ip.field_indicadores_value = i.entity_id and i.entity_type = 'field_collection_item' and i.bundle = 'field_indicadores' and i.deleted = 0");
+    $query->join("field_data_field_id", "idi", "i.field_indicador_target_id = idi.entity_id and idi.entity_type = 'datos_mediciones' and idi.bundle = 'indicador' and idi.deleted = 0");
+    $query->join("eck_datos_mediciones", "ie", "i.field_indicador_target_id = ie.id and ie.type = 'indicador'");
+    $query->join("field_data_field_valor", "v", "ip.field_indicadores_value = v.entity_id and v.entity_type = 'field_collection_item' and v.bundle = 'field_indicadores' and v.deleted = 0");
+    $query->join("webform_component", "cp", "tp.field_pregunta_medicion_actual_value = cp.form_key");
+    $query->join("field_data_field_pregunta_medicion_actual", "taxp", "tp.field_pregunta_medicion_actual_value = taxp.field_pregunta_medicion_actual_value and taxp.entity_type = 'taxonomy_term' and taxp.bundle = 'categoria_pregunta'");
+    $query->join("taxonomy_term_data", "tdatap", "taxp.entity_id = tdatap.tid");
+    $query->join("taxonomy_vocabulary", "vocabp", "tdatap.vid = vocabp.vid and vocabp.machine_name = 'categoria_pregunta'");
+    $query->condition("t.entity_type", "estadistica_medicion");
+    $query->condition("t.bundle", "indicador_trimestre");
+    $query->condition("idi.field_id_value", 4);
+    $query->condition("tri.field_id_value", $context['trimestre']);
+    $query->addField("tp", "field_pregunta_medicion_actual_value", "point_id");
+    $query->addField("tdatap", "name", "point_name");
+    $query->addField("idi", "field_id_value", "indicador");
+    $query->addField("ie", "title", "indicador_name");
+    $query->addExpression("v.field_valor_value", "point_y");
+    $query->addField("c", "field_cantidad_mediciones_value", "serie_total");
+    _caja18_apply_filters($query, $context);
+  } else {
+    $preguntas = _caja18_id_preguntas();
+    $queryTotales = caja18_get_query_totales($context);
+
+    $query = db_select("webform_submitted_data", "d1");
+    $query->join("webform_component", "c1", "d1.cid = c1.cid");
+    $query->join("node", "n1", "d1.nid = n1.nid and n1.title = 'Medición Actual'");
+    $query->join("webform_submitted_data", "d2", "d1.sid = d2.sid");
+    $query->join("webform_component", "c2", "d2.cid = c2.cid and c2.form_key = 'sucursal'");
+    $query->join($queryTotales, "t", "d1.cid = t.pregunta_id");
+    $query->join("field_data_field_pregunta_medicion_actual", "taxp", "c1.form_key = taxp.field_pregunta_medicion_actual_value and taxp.entity_type = 'taxonomy_term' and taxp.bundle = 'categoria_pregunta'");
+    $query->join("taxonomy_term_data", "tdatap", "taxp.entity_id = tdatap.tid");
+    $query->join("taxonomy_vocabulary", "vocabp", "tdatap.vid = vocabp.vid and vocabp.machine_name = 'categoria_pregunta'");
+    $query->addField("tdatap", "name", "point_name");
+    $query->addField("t", "total", "serie_total");
+    $query->addExpression("c1.form_key", "point_id");
+    $query->addExpression("avg(d1.data)", "point_y");
+    $query->addExpression("4", "indicador");
+    $query->condition("c1.form_key", $preguntas, "IN");
+    $query->condition("d1.data", 8, "<");
+    $query->orderBy("c1.form_key");
+    $query->groupBy("c1.form_key");
+    _caja18_apply_filters($query, $context);
+    _caja18_join_indicadores_defs($query);
+  }
+
+  return $query->execute()->fetchAll();
+}
+
+function _caja18_query_access(&$query, $context) {
+  if (user_access("view any caja18 kpi data")) {
+    return;
+  }
+  $conditions = _caja18_get_access_conditions();
+  if ($context['trimestre']) {
+    if ($context['pregunta']) {
+      if ($conditions['sucursal']) {
+        $query->condition("uasi.field_id_value", $conditions['sucursal']);
+        $query->join("field_data_field_sucursal", "uas", "t.entity_id = uas.entity_id and uas.entity_type = 'estadistica_medicion' and uas.bundle = 'indicador_trimestre' and uas.deleted = 0");
+        $query->join("field_data_field_id", "uasi", "uas.field_sucursal_target_id = uasi.entity_id and uasi.entity_type = 'datos_mediciones' and uasi.bundle = 'sucursal' and uasi.deleted = 0");
+      } else if ($conditions['grupo']) {
+        $query->condition("uasi.field_id_value", $conditions['grupo']);
+        $query->join("field_data_field_grupo", "uas", "t.entity_id = uas.entity_id and uas.entity_type = 'estadistica_medicion' and uas.bundle = 'indicador_trimestre' and uas.deleted = 0");
+        $query->join("field_data_field_id", "uasi", "uas.field_grupo_target_id = uasi.entity_id and uasi.entity_type = 'datos_mediciones' and uasi.bundle = 'grupo' and uasi.deleted = 0");
+      }
+    } else if ($context['sucursal']) {
+      $query->condition("uasi.field_id_value", $conditions['sucursal']);
+      $query->join("field_data_field_sucursal", "uas", "t.entity_id = uas.entity_id and uas.entity_type = 'estadistica_medicion' and uas.bundle = 'indicador_trimestre' and uas.deleted = 0");
+      $query->join("field_data_field_id", "uasi", "uas.field_sucursal_target_id = uasi.entity_id and uasi.entity_type = 'datos_mediciones' and uasi.bundle = 'sucursal' and uasi.deleted = 0");
+    } else if ($context['zona']) {
+      $query->condition("uasi.field_id_value", $conditions['zona']);
+      $query->join("field_data_field_zona", "uas", "t.entity_id = uas.entity_id and uas.entity_type = 'estadistica_medicion' and uas.bundle = 'indicador_trimestre' and uas.deleted = 0");
+      $query->join("field_data_field_id", "uasi", "uas.field_zona_target_id = uasi.entity_id and uasi.entity_type = 'datos_mediciones' and uasi.bundle = 'zona' and uasi.deleted = 0");
+    } else if ($context['grupo']) {
+      $query->condition("uasi.field_id_value", $conditions['grupo']);
+      $query->join("field_data_field_grupo", "uas", "t.entity_id = uas.entity_id and uas.entity_type = 'estadistica_medicion' and uas.bundle = 'indicador_trimestre' and uas.deleted = 0");
+      $query->join("field_data_field_id", "uasi", "uas.field_grupo_target_id = uasi.entity_id and uasi.entity_type = 'datos_mediciones' and uasi.bundle = 'grupo' and uasi.deleted = 0");
+    }
+  } else {
+    if ($context['pregunta']) {
+      if ($conditions['sucursal']) {
+        $query->condition("d2.data", $conditions['sucursal']);
+      } else if ($conditions['grupo']) {
+        $query->condition("d2.data", _caja18_get_children($context, $conditions['grupo'], 'grupo', 'sucursal'));
+      }
+    } else if ($context['sucursal']) {
+      $query->condition("d2.data", $conditions['sucursal']);
+    }
+  }
+}
+
+function _caja18_apply_filters(&$query, $context) {
+  if ($context['trimestre']) {
+    $tipo = "total";
+    if ($context['sucursal']) {
+      $tipo = "sucursal";
+      $query->condition("si.field_id_value", (int)$context['sucursal']);
+      if (empty($context['pregunta'])) {
+        $query->join("field_data_field_sucursal", "s", "t.entity_id = s.entity_id and s.entity_type = 'estadistica_medicion' and s.bundle = 'indicador_trimestre' and s.deleted = 0");
+        $query->join("field_data_field_id", "si", "s.field_sucursal_target_id = si.entity_id and si.entity_type = 'datos_mediciones' and si.bundle = 'sucursal' and si.deleted = 0");
+      }
+    } else if ($context['zona']) {
+      $tipo = "zona";
+      $query->condition("zi.field_id_value", (int)$context['zona']);
+      $query->join("field_data_field_zona", "z", "t.entity_id = z.entity_id and z.entity_type = 'estadistica_medicion' and z.bundle = 'indicador_trimestre' and z.deleted = 0");
+      $query->join("field_data_field_id", "zi", "z.field_zona_target_id = zi.entity_id and zi.entity_type = 'datos_mediciones' and zi.bundle = 'zona' and zi.deleted = 0");
+    } else if ($context['grupo']) {
+      $tipo = "grupo";
+      $query->condition("gi.field_id_value", (int)$context['grupo']);
+      $query->join("field_data_field_grupo", "g", "t.entity_id = g.entity_id and g.entity_type = 'estadistica_medicion' and g.bundle = 'indicador_trimestre' and g.deleted = 0");
+      $query->join("field_data_field_id", "gi", "g.field_grupo_target_id = gi.entity_id and gi.entity_type = 'datos_mediciones' and gi.bundle = 'grupo' and gi.deleted = 0");
+    }
+    $query->condition("tipo.field_tipo_indicador_trimestre_value", $tipo);
+
+  } else {
+    if ($context['sucursal']) {
+      $query->condition("d2.data", (int)$context['sucursal']);
+    } else if ($context['zona']) {
+      $query->condition("z.data", (int)$context['zona']);
+      $query->join("webform_submitted_data", "z", "d1.sid = z.sid");
+      $query->join("webform_component", "zc", "z.cid = zc.cid and zc.form_key = 'jefe'");
+    } else if ($context['grupo']) {
+      $query->condition("g.data", (int)$context['grupo']);
+      $query->join("webform_submitted_data", "g", "d1.sid = g.sid");
+      $query->join("webform_component", "gc", "g.cid = gc.cid and gc.form_key = 'grupo'");
+    }
+    $fromOperator = "=";
+    if ($context['semana'] && $context['semana_hasta']) {
+      $fromOperator = ">=";
+    }
+    if ($context['semana']) {
+      $query->condition("s.data", (int)$context['semana'], $fromOperator);
+      $query->join("webform_submitted_data", "s", "d1.sid = s.sid");
+      $query->join("webform_component", "sc", "s.cid = sc.cid and sc.form_key = 'semana'");
+    }
+    if ($context['semana_hasta']) {
+      $query->condition("s.data", (int)$context['semana_hasta'], "<=");
+      if (empty($context['semana'])) {
+        $query->join("webform_submitted_data", "s", "d1.sid = s.sid");
+        $query->join("webform_component", "sc", "s.cid = sc.cid and sc.form_key = 'semana'");
+      }
+    }
+  }
+  _caja18_query_access($query, $context);
+}
+
+function caja18_get_base_data_query() {
+  $query = db_select("webform_submitted_data", "d1");
+  $query->join("webform_component", "c1", "d1.cid = c1.cid");
+  $query->join("node", "n1", "d1.nid = n1.nid and n1.title = 'Medición Actual'");
+  $query->join("webform_submitted_data", "d2", "d1.sid = d2.sid");
+  $query->join("webform_component", "c2", "d2.cid = c2.cid and c2.form_key = 'sucursal'");
+  $query->addExpression("CASE
+  WHEN d1.data IN (6, 7) THEN 1
+  WHEN d1.data IN (1, 2, 3, 4) THEN 2
+  ELSE NULL
+  END", "indicador");
+  $query->addExpression("CASE
+  WHEN d1.data IN (1, 2, 3, 4) THEN -1
+  ELSE 1
+  END", "indicador_factor");
+  return $query;
+}
+
+function caja18_get_query_totales($context = array()) {
+  if ($context['trimestre']) {
+    $query = db_select("field_data_field_trimestre", "t");
+    $query->join("field_data_field_tipo_indicador_trimestre", "tipo", "t.entity_id = tipo.entity_id and tipo.entity_type = 'estadistica_medicion' and tipo.bundle = 'indicador_trimestre' and tipo.deleted = 0");
+    $query->join("field_data_field_id", "tri", "t.field_trimestre_target_id = tri.entity_id and tri.entity_type = 'datos_mediciones' and tri.bundle = 'trimestre' and tri.deleted = 0");
+    $query->join("field_data_field_preguntas_medicion_actual", "p", "t.entity_id = p.entity_id and p.entity_type = 'estadistica_medicion' and p.bundle = 'indicador_trimestre' and p.deleted = 0");
+    $query->join("field_data_field_pregunta_medicion_actual", "tp", "p.field_preguntas_medicion_actual_value = tp.entity_id and tp.entity_type = 'field_collection_item' and tp.bundle = 'field_preguntas_medicion_actual' and tp.deleted = 0");
+    $query->join("field_data_field_indicadores", "ip", "p.field_preguntas_medicion_actual_value = ip.entity_id and ip.entity_type = 'field_collection_item' and ip.bundle = 'field_preguntas_medicion_actual' and ip.deleted = 0");
+    $query->join("field_data_field_indicador", "i", "ip.field_indicadores_value = i.entity_id and i.entity_type = 'field_collection_item' and i.bundle = 'field_indicadores' and i.deleted = 0");
+    $query->join("field_data_field_id", "idi", "i.field_indicador_target_id = idi.entity_id and idi.entity_type = 'datos_mediciones' and idi.bundle = 'indicador' and idi.deleted = 0");
+    $query->join("eck_datos_mediciones", "ie", "i.field_indicador_target_id = ie.id and ie.type = 'indicador'");
+    $query->join("field_data_field_valor", "v", "ip.field_indicadores_value = v.entity_id and v.entity_type = 'field_collection_item' and v.bundle = 'field_indicadores' and v.deleted = 0");
+    $query->condition("t.entity_type", "estadistica_medicion");
+    $query->condition("t.bundle", "indicador_trimestre");
+    $query->condition("idi.field_id_value", array(5));
+    $query->condition("tri.field_id_value", $context['trimestre']);
+    $query->addField("tp", "field_pregunta_medicion_actual_value", "pregunta_id");
+    $query->addExpression("max(v.field_valor_value)", "total");
+    $query->groupBy("tp.field_pregunta_medicion_actual_value");
+    _caja18_apply_filters($query, $context);
+  } else {
+    $query = db_select("webform_submitted_data", "d1");
+    $query->join("webform_component", "c1", "d1.cid = c1.cid");
+    $query->join("node", "n1", "d1.nid = n1.nid and n1.title = 'Medición Actual'");
+    $query->join("webform_submitted_data", "d2", "d1.sid = d2.sid");
+    $query->join("webform_component", "c2", "d2.cid = c2.cid and c2.form_key = 'sucursal'");
+
+    $query->addExpression("count(d1.sid)", "total");
+    $query->condition("d1.data", 8, "<>");
+
+    if ($context['pregunta']) {
+      $query->join("field_data_field_id", "t", "d2.data = t.field_id_value and t.entity_type = :entity_type and t.bundle = :bundle and t.deleted = 0", array(':entity_type' => ECK_TYPE_DATA_DEF, ":bundle" => "sucursal"));
+      $query->join("eck_" . ECK_TYPE_DATA_DEF, "edt", "t.entity_id = edt.id and edt.type = :bundle", array(":bundle" => "sucursal"));
+      $query->addField("edt", "title", "sucursal_name");
+      $query->addField("d2", "data", "sucursal_id");
+      $query->condition("c1.form_key", $context['pregunta']);
+      $query->orderBy("c1.cid");
+      $query->orderBy("d2.data");
+      $query->groupBy("c1.cid");
+      $query->groupBy("d2.data");
+      _caja18_apply_filters($query, $context);
+
+      $query = db_select($query, "t");
+      $query->fields("t", array("sucursal_name", "sucursal_id"));
+      $query->addExpression("sum(t.total)", "total");
+      $query->groupBy("t.sucursal_name");
+      $query->groupBy("t.sucursal_id");
+    } else {
+      $query->addField("c1", "name", "pregunta_name");
+      $query->addField("d1", "cid", "pregunta_id");
+      $preguntas = _caja18_id_preguntas();
+      $query->condition("c1.form_key", $preguntas, "IN");
+      $query->orderBy("d1.cid");
+      $query->groupBy("c1.cid");
+      _caja18_apply_filters($query, $context);
+
+      $query = db_select($query, "t");
+      $query->fields("t", array("pregunta_name", "pregunta_id"));
+      $query->addExpression("sum(t.total)", "total");
+      $query->groupBy("t.pregunta_name");
+      $query->groupBy("t.pregunta_id");
+    }
+  }
+
+  return $query;
+}
+
+function caja18_get_muestra($context = array()) {
+  if ($context['trimestre']) {
+    $query = db_select("field_data_field_trimestre", "t");
+    $query->join("field_data_field_cantidad_mediciones", "c", "t.entity_id = c.entity_id and c.entity_type = 'estadistica_medicion' and c.bundle = 'indicador_trimestre' and c.deleted = 0");
+    $query->join("field_data_field_tipo_indicador_trimestre", "tipo", "t.entity_id = tipo.entity_id and tipo.entity_type = 'estadistica_medicion' and tipo.bundle = 'indicador_trimestre' and tipo.deleted = 0");
+    $query->join("field_data_field_id", "tri", "t.field_trimestre_target_id = tri.entity_id and tri.entity_type = 'datos_mediciones' and tri.bundle = 'trimestre' and tri.deleted = 0");
+    if ($context['pregunta']) {
+      $query->join("field_data_field_sucursal", "s", "t.entity_id = s.entity_id and s.entity_type = 'estadistica_medicion' and s.bundle = 'indicador_trimestre' and s.deleted = 0");
+      $query->join("field_data_field_id", "si", "s.field_sucursal_target_id = si.entity_id and si.entity_type = 'datos_mediciones' and si.bundle = 'sucursal' and si.deleted = 0");
+    }
+
+    $query->condition("t.entity_type", "estadistica_medicion");
+    $query->condition("t.bundle", "indicador_trimestre");
+    $query->condition("tri.field_id_value", $context['trimestre']);
+    $query->addField("c", "field_cantidad_mediciones_value", "serie_total");
+    _caja18_apply_filters($query, $context);
+  } else {
+    $query = db_select("webform_submitted_data", "d1");
+    $query->join("webform_component", "c1", "d1.cid = c1.cid");
+    $query->join("node", "n1", "d1.nid = n1.nid and n1.title = 'Medición Actual'");
+    $query->join("webform_submitted_data", "d2", "d1.sid = d2.sid");
+    $query->join("webform_component", "c2", "d2.cid = c2.cid and c2.form_key = 'sucursal'");
+
+    $query->condition("d1.data", 8, "<>");
+    if ($context['pregunta']) {
+      $query->addExpression("count(d1.sid)", "total");
+      $query->condition("c1.form_key", $context['pregunta']);
+      _caja18_apply_filters($query, $context);
+    } else {
+      $preguntas = _caja18_id_preguntas();
+      $query->addExpression("count(d1.sid)", "total");
+      $query->condition("c1.form_key", $preguntas, "IN");
+      $query->groupBy("c1.form_key");
+      _caja18_apply_filters($query, $context);
+      $query = db_select($query, "t");
+      $query->addExpression("max(t.total)", "total");
+    }
+  }
+
+  return $query->execute()->fetchColumn();
+}
+
+
+function _caja18_build_series_indicadores($data, $drilldown = false) {
+  $preguntas = _caja18_get_preguntas();
+  $indPreguntas = array();
+
+  $series = array();
+  foreach ($data as $item) {
+    if (!isset($indPreguntas[$item->point_id])) {
+      $indPreguntas[$item->point_id] = $item->point_id;
+    }
+    if (!isset($series[$item->indicador])) {
+      $series[$item->indicador] = array(
+        'name' => $item->indicador_name,
+        'id' => $item->indicador,
+        'data' => array(),
+      );
+      switch ($item->indicador) {
+        case 1:
+          $series[$item->indicador]['dataLabels'] = array(
+            'y' => -20,
+          );
+          break;
+        case 3:
+          $series[$item->indicador]['dataLabels'] = array(
+            'y' => 30,
+          );
+          break;
+      }
+    }
+    $series[$item->indicador]['data'][] = array(
+      'name' => isset($item->serie_total) ? $item->point_name . (($drilldown) ? "<br />" : " - ") . "Nº " . (int)$item->serie_total . ( $drilldown ? "<br />Detalle Sucursales" : "") : $item->point_name,
+      'id' => $item->point_id,
+      'indicador' => $item->indicador,
+      'y' => $item->point_y * 1,
+      'drilldown' => ($item->indicador == 3) ? $drilldown : false,
+    );
+  }
+  if ($drilldown) {
+    $seriesVacias = array();
+    foreach ($preguntas as $pregunta) {
+      if (!isset($indPreguntas[$pregunta->form_key])) {
+        $seriesVacias[] = $pregunta;
+      }
+    }
+    foreach ($seriesVacias as $pregunta) {
+      foreach ($series as &$serie) {
+        $serie['data'][] = array(
+          'name' => $pregunta->name,
+          'id' => $pregunta->form_key,
+          'y' => NULL,
+          'drilldown' => false,
+        );
+      }
+    }
+  }
+  return $series;
+}
+
+function _caja18_series_indicadores($context = array()) {
+  $data = array();
+  $drilldown = false;
+  if (isset($context['pregunta'])) {
+    $data = _caja18_indicadores_sucursales($context);
+  } else {
+    $data = _caja18_indicadores_preguntas($context);
+    $drilldown = true;
+  }
+  $series = _caja18_build_series_indicadores($data, $drilldown);
+  if (empty($context['trimestre'])) {
+    $indicadores = _caja18_get_indicadores();
+    foreach ($indicadores as $indicador) {
+      if ($indicador->field_id_value == 3) {
+        break;
+      }
+    }
+    $baseIndex = 1;
+    $secondIndex = 2;
+    $found = false;
+
+    foreach (array(1, 2) as $idIndicador) {
+      if (!isset($series[$idIndicador])) {
+        foreach ($indicadores as $indDef) {
+          if ($indDef->field_id_value == $idIndicador) {
+            break;
+          }
+        }
+        $series[$idIndicador] = (array) $indDef;
+        $series[$idIndicador]['data'] = array();
+      }
+    }
+
+    if (!empty($series) && count($series[1]['data']) < count($series[2]['data'])) {
+      $baseIndex = 2;
+      $secondIndex = 1;
+    }
+    $baseSerie = (!empty($series)) ? $series[$baseIndex] : array();
+    $neto = (array) $indicador + $baseSerie;
+    if (!empty($neto) && !empty($series)) {
+      $neto['type'] = "scatter";
+      $neto['dataLabels'] = array(
+        'y' => 30,
+      );
+      if (isset($context['pregunta'])) {
+        $neto['dataLabels'] = array(
+          'y' => 40,
+        );
+      }
+      foreach ($neto['data'] as &$item) {
+        $found = false;
+        foreach ($series[$secondIndex]['data'] as $point) {
+          if ($point['id'] == $item['id']) {
+            $found = true;
+            break;
+          }
+        }
+        if (!$found) {
+          $point = array("y" => 0);
+        }
+        $item['y'] = abs($item['y'] + $point['y']);
+        $item['drilldown'] = !isset($context['pregunta']) ? true : false;
+        $item['indicador'] = $neto['field_id_value'];
+      }
+      $series[$neto['field_id_value']] = $neto;
+    }
+  } else {
+    $series[3]['type'] = "scatter";
+    if (isset($context['pregunta'])) {
+      $series[3]['dataLabels'] = array(
+        'y' => 40,
+      );
+    }
+
+  }
+  $series[1]['color'] = "#003477";
+  $series[2]['color'] = "#DF5353";
+  $series[3]['color'] = "#55BF3B";
+
+  if ($context['pregunta']) {
+    if (empty($series[1]['data'])) {
+      watchdog("log error detalle", "series: <pre>@series</pre>", array('@series' => print_r($series, true)), WATCHDOG_DEBUG);
+      watchdog("log error detalle", "data: <pre>@data</pre>", array('@data' => print_r($data, true)), WATCHDOG_DEBUG);
+      watchdog("log error detalle", "context: <pre>@context</pre>", array('@context' => print_r($context, true)), WATCHDOG_DEBUG);
+    }
+    usort($series[1]['data'], function($x, $y) {
+      return $x['y'] < $y['y'];
+    });
+  }
+
+  return array_values($series);
+}
+
+function _caja18_get_preguntas() {
+  $preguntas = _caja18_id_preguntas();
+  $query = db_select("webform_component", "c");
+  $query->join("node", "n", "c.nid = n.nid and n.title = 'Medición Actual'");
+  $query->fields("c", array("form_key", "name"));
+  $query->condition("c.form_key", $preguntas, "IN");
+  $query->orderBy("c.form_key");
+  return $query->execute()->fetchAll();
+}
+
+function _caja18_get_indicadores() {
+  $query = db_select("eck_datos_mediciones", "d");
+  $query->join("field_data_field_id", "i", "d.id = i.entity_id and i.entity_type = 'datos_mediciones' and i.bundle = 'indicador' and i.deleted = 0");
+  $query->addField("d", "id");
+  $query->addField("d", "title", "name");
+  $query->addField("i", "field_id_value");
+  $query->orderBy("d.title");
+  return $query->execute()->fetchAll();
+}
+
+/**
+ * Form submission function to parse the Excel file and add to the database.
+ *
+ * @param $form
+ *   The current form.
+ * @param $form_state
+ *   The current form values of a submission.
+ *
+ * @see caja18_data_import_form()
+ */
+function caja18_data_import_form_submit($form, $form_state) {
+  $limits = array(
+    'extensions' => 'xls xlsx'
+  );
+  $validators = array(
+    'file_validate_extensions' => array($limits['extensions'])
+  );
+  module_load_include('inc', 'webform', 'includes/webform.report');
+
+  if ($file = file_save_upload('data_file', $validators)) {
+    $filename = drupal_realpath($file->uri);
+    module_load_include('inc', 'phpexcel');
+
+    $result = db_query("SELECT n.nid FROM {node} n WHERE n.title = :title AND n.type = :type", array(":title"=> 'Medición Actual', ":type"=> 'webform'));
+    $nid = $result->fetchField();
+    $webform = node_load($nid);
+    $mapField = array();
+    foreach ($webform->webform['components'] as $cid => $component) {
+      $mapField[$component['form_key']] = $cid;
+    }
+    $mapField['cod_ciudad'] = $mapField['sucursal'];
+
+    $xlsx = phpexcel_import($filename, TRUE, FALSE, array(
+      'caja18-xlsx-import' => array(
+        'type' => "medicion-actual",
+        'mapField' => $mapField,
+      ),
+    ));
+    $data = $xlsx[0];
+
+    $cacheID = "data-import-" . drupal_random_key();
+    cache_set($cacheID, $data);
+
+    $batch_size = min(webform_export_batch_size($webform), 500);
+
+    $batch = array(
+      'operations' => array(
+        array('webform_clear_batch_rows', array($webform, $batch_size)),
+        array('caja18_data_import_progress', array($cacheID, $webform))
+      ),
+      'finished' => 'caja18_quarter_data_import_finished',
+      'title' => t('Caja18 quarter import'),
+      'init_message' => t('Importing is starting...'),
+      'progress_message' => t('Imported @current out of @total.'),
+      'error_message' => t('Data importer has encountered an error.'),
+      'file' => drupal_get_path('module', 'webform') . '/includes/webform.report.inc',
+    );
+
+    batch_set($batch);
+  }
+  else {
+    form_set_error('quarter_file', t('Uploaded file could not be saved.'));
+    watchdog('caja18-import', 'File save error. Could not save file %file to path %path.!details', array('%file' => $file->filename, '%path' => $file->filepath, '!results' => '<br />\n<pre>' . htmlentities(print_r($form_state['values'], TRUE)) . '</pre>'), WATCHDOG_ERROR);
+  }
+}
+
+function caja18_data_import_progress($cid, $webform, &$context) {
+  module_load_include('inc', 'webform', 'includes/webform.submissions');
+  $data = array();
+  if ($cache = cache_get($cid)) {
+    $data = $cache->data;
+  }
+  global $user;
+  if (empty($context['sandbox'])) {
+    if (!isset($context['sandbox']['progress'])) {
+      $context['sandbox']['progress'] = 0;
+      $context['sandbox']['current_row'] = 0;
+      $context['sandbox']['max'] = count($data);
+    }
+  }
+  $limit = 20;
+  $result = array_slice($data, $context['sandbox']['current_row'], $limit);
+  foreach ($result as $row) {
+    $submission = (object) array(
+          'nid' => $webform->nid,
+          'uid' => $user->uid,
+          'submitted' => time(),
+          'remote_addr' => ip_address(),
+          'is_draft' => 0,
+          'data' => webform_submission_data($webform, $row),
+    );
+    webform_submission_insert($webform, $submission);
+    // Update our progress information.
+    $context['sandbox']['progress']++;
+  }
+  $context['sandbox']['current_row'] += count($result);
+  $context['message'] = t('Now processing COUNT items of TOTAL. Last imported item: LAST', array('COUNT' => count($result), 'TOTAL' => $context['sandbox']['max'], 'LAST' => $context['sandbox']['current_row']));
+  if ($context['sandbox']['progress'] != $context['sandbox']['max']) {
+    $context['finished'] = $context['sandbox']['max'] ? $context['sandbox']['progress'] / $context['sandbox']['max'] : 1;
+  }
+
+}
+
+function caja18_phpexcel_import($op, &$data, $phpexcel, $options, $column, $row) {
+  static $headers = array();
+  if ($op != "pre cell" || !isset($options['custom_calls']['caja18-xlsx-import'])) {
+    return;
+  }
+  $import = $options['custom_calls']['caja18-xlsx-import'];
+  switch ($import['type']) {
+    case "medicion-actual":
+      if ($row === 0 && isset($import['mapField'][$data])) {
+        $data = $import['mapField'][$data];
+      }
+      break;
+  }
+}

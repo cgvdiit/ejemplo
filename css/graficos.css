@@ -1,0 +1,20 @@
+.promedios {
+  margin: 0 -7px 0 35px;
+}
+
+.promedios.rol-sucursal {
+  margin: 0 -68px 0 79px;
+}
+
+
+@media (min-width: 768px) {
+  .promedios .grafico {
+    float: left;
+    width: 16.6%;
+    height: 220px;
+    margin: 0 auto
+  }
+  .promedios.rol-sucursal .grafico {
+    width: 19.6%;
+  }
+}

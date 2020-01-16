@@ -1,0 +1,267 @@
+# $Id$
+#
+# Spanish translation of Drupal (general)
+# Copyright YEAR NAME <EMAIL@ADDRESS>
+# Generated from files:
+#  caja18.features.field_instance.inc: n/a
+#  caja18.views_default.inc: n/a
+#  caja18.module: n/a
+#  caja18.info: n/a
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: PROJECT VERSION\n"
+"POT-Creation-Date: 2019-08-20 21:18-0300\n"
+"PO-Revision-Date: 2019-08-21 00:03-0400\n"
+"Last-Translator: NAME <EMAIL@ADDRESS>\n"
+"Language-Team: Spanish <EMAIL@ADDRESS>\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n!=1);\n"
+"Language: es\n"
+"X-Generator: Poedit 2.2.3\n"
+
+#: caja18.features.field_instance.inc:815
+msgid "Cantidad"
+msgstr ""
+
+#: caja18.features.field_instance.inc:816 caja18.views_default.inc:480
+msgid "Grupo"
+msgstr ""
+
+#: caja18.features.field_instance.inc:817 caja18.views_default.inc:201
+msgid "ID"
+msgstr "ID"
+
+#: caja18.features.field_instance.inc:818
+msgid "Indicador"
+msgstr ""
+
+#: caja18.features.field_instance.inc:819
+msgid "Indicadores"
+msgstr ""
+
+#: caja18.features.field_instance.inc:820
+msgid "Pregunta"
+msgstr ""
+
+#: caja18.features.field_instance.inc:821
+msgid "Preguntas"
+msgstr ""
+
+#: caja18.features.field_instance.inc:822 caja18.views_default.inc:478
+msgid "Sucursal"
+msgstr ""
+
+#: caja18.features.field_instance.inc:823 caja18.views_default.inc:200;477
+msgid "Tipo"
+msgstr ""
+
+#: caja18.features.field_instance.inc:824 caja18.views_default.inc:476
+msgid "Trimestre"
+msgstr ""
+
+#: caja18.features.field_instance.inc:825
+msgid "Valor"
+msgstr ""
+
+#: caja18.features.field_instance.inc:826 caja18.views_default.inc:479
+msgid "Zona"
+msgstr ""
+
+#: caja18.views_default.inc:183;460
+msgid "Master"
+msgstr "Máster"
+
+#: caja18.views_default.inc:184
+msgid "Admin Datos Mediciones"
+msgstr ""
+
+#: caja18.views_default.inc:185;462
+msgid "más"
+msgstr ""
+
+#: caja18.views_default.inc:186;463
+msgid "Aplicar"
+msgstr ""
+
+#: caja18.views_default.inc:187;464
+msgid "Restablecer"
+msgstr ""
+
+#: caja18.views_default.inc:188;465
+msgid "Ordenar por"
+msgstr ""
+
+#: caja18.views_default.inc:189;466
+msgid "Asc"
+msgstr "Asc"
+
+#: caja18.views_default.inc:190;467
+msgid "Desc"
+msgstr "Desc"
+
+#: caja18.views_default.inc:191;468
+msgid "Elementos por página"
+msgstr ""
+
+#: caja18.views_default.inc:192;469
+msgid "- Todo -"
+msgstr ""
+
+#: caja18.views_default.inc:193;470
+msgid "Desplazamiento"
+msgstr ""
+
+#: caja18.views_default.inc:194;471
+msgid "« primero"
+msgstr ""
+
+#: caja18.views_default.inc:195;472
+msgid "‹ anterior"
+msgstr ""
+
+#: caja18.views_default.inc:196;473
+msgid "siguiente ›"
+msgstr ""
+
+#: caja18.views_default.inc:197;474
+msgid "última »"
+msgstr ""
+
+#: caja18.views_default.inc:198
+msgid "Datos Mediciones"
+msgstr ""
+
+#: caja18.views_default.inc:199;475
+msgid "- Choose an operation -"
+msgstr "- Seleccionar -"
+
+#: caja18.views_default.inc:202
+msgid "Título"
+msgstr ""
+
+#: caja18.views_default.inc:203;481
+msgid "Acciones"
+msgstr ""
+
+#: caja18.views_default.inc:204;482
+msgid "Enlace de borrado"
+msgstr ""
+
+#: caja18.views_default.inc:205;483
+msgid "Enlace de edición"
+msgstr ""
+
+#: caja18.views_default.inc:206;484
+msgid "Page"
+msgstr "Página"
+
+#: caja18.views_default.inc:461
+msgid "Admin Datos Trimestres"
+msgstr ""
+
+#: caja18.module:85
+msgid "Quarter data file"
+msgstr "Archivo trimestre"
+
+#: caja18.module:86;117
+msgid "Choose the data file containing the quarter data you want uploaded."
+msgstr "Seleccionar el archivo con los datos del trimestre."
+
+#: caja18.module:96;127
+msgid "Submit"
+msgstr "Enviar"
+
+#: caja18.module:116
+msgid "Data file"
+msgstr "Archivo medición actual"
+
+#: caja18.module:171;1494
+msgid "Caja18 quarter import"
+msgstr "Importar Trimestre"
+
+#: caja18.module:172;1495
+msgid "Importing is starting..."
+msgstr "Iniciando imprtación..."
+
+#: caja18.module:173;1496
+msgid "Imported @current out of @total."
+msgstr "@current / @total"
+
+#: caja18.module:174
+msgid "Node importer has encountered an error."
+msgstr "Error en la importación"
+
+#: caja18.module:184;1504
+msgid "Uploaded file could not be saved."
+msgstr "No se pudo cargar el archivo."
+
+#: caja18.module:261
+msgid "Se creo el trimestre %id. !url"
+msgstr ""
+
+#: caja18.module:379
+msgid "Upload Caja 18 data"
+msgstr "Cargar Medición Actual"
+
+#: caja18.module:382
+msgid "View any Caja 18 kpi data"
+msgstr "Ver cualquier indicador"
+
+#: caja18.module:444
+msgid "Se creo la zona %id. !url"
+msgstr ""
+
+#: caja18.module:462
+msgid "Se creo el grupo %id. !url"
+msgstr ""
+
+#: caja18.module:1497
+msgid "Data importer has encountered an error."
+msgstr "Error en la importación"
+
+#: caja18.module:1542
+msgid "Now processing COUNT items of TOTAL. Last imported item: LAST"
+msgstr "Procesando COUNT items de TOTAL. Último registro: LAST"
+
+#: caja18.module:185;1505
+msgid "caja18-import"
+msgstr ""
+
+#: caja18.module:185;1505
+msgid "File save error. Could not save file %file to path %path.!details"
+msgstr "Error a cargar archivo %file [ %path ]. !details"
+
+#: caja18.module:291;312;325;355
+msgid "caja19-data-import"
+msgstr ""
+
+#: caja18.module:291
+msgid "No se pudo encontrar la sucursal id %id."
+msgstr ""
+
+#: caja18.module:312
+msgid "No se pudo encontrar la zona id %id."
+msgstr ""
+
+#: caja18.module:325
+msgid "No se pudo encontrar el grupo id %id."
+msgstr ""
+
+#: caja18.module:355
+msgid "No se pudo importar registro %id."
+msgstr ""
+
+#: caja18.module:19
+msgid "Upload Caja18 quarter data"
+msgstr "Cargar Datos Trimestre"
+
+#: caja18.module:27
+msgid "Upload Caja18 data"
+msgstr "Cargar Medición Actual"
+
+#: caja18.info:0;0
+msgid "Caja 18"
+msgstr ""
